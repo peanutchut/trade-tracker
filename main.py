@@ -8,8 +8,7 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_NAME = "trade-signals"
 
-
-print("Sending...")
+print("Starting Discord Bot...")
 
 gc = gspread.service_account(filename='/Users/evanarumbaka/Desktop/DISCORD_BOT/credentialscopy.json')
 sheet = gc.open("Trade Tracker Test").sheet1
