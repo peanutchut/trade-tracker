@@ -13,3 +13,6 @@ It should be the same files as the ones in github
 
 either way js practicing pushing pulling new things
 '''
+
+
+Print("LOSER pull check")
