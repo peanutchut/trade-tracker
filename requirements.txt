@@ -1,3 +1,6 @@
 discord.py
 gspread
+oauth2client
+fastapi
+uvicorn
 python-dotenv

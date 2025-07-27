@@ -4,18 +4,35 @@ from dotenv import load_dotenv
 import gspread
 from datetime import datetime
 
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from hypercorn.asyncio import serve
+from hypercorn.config import Config
+import asyncio
+
+# Load env variables
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_NAME = "trade-signals"
 
+# Setup Google Sheets
 gc = gspread.service_account(filename='/Users/evanarumbaka/Desktop/DISCORD_BOT/credentialscopy.json')
 sheet = gc.open("Trade Tracker Test").sheet1
 
+# Setup Discord client
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-def parse_trade(message): # NEED TO TALK TO SHANI MAMA ABOUT THIS AND MAKE CHANGES
+# Setup FastAPI app
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return JSONResponse(content={"message": "Bot is running!"})
+
+# Parse trade message
+def parse_trade(message):
     parts = message.strip().split()
     if len(parts) == 5 and parts[0] in ["BUY", "SELL"] and "@" in parts:
         action = parts[0]
@@ -23,7 +40,7 @@ def parse_trade(message): # NEED TO TALK TO SHANI MAMA ABOUT THIS AND MAKE CHANG
         strike = parts[2]
         price = parts[4]
         return [str(datetime.now()), action, ticker, strike, price]
-    return None #CURRENTLY ITS BAREBONES, this is the format [(BUY/SELL) + (TICKER) + (##C (call)) + @ + (##PRICE)]
+    return None
 
 @client.event
 async def on_ready():
@@ -39,8 +56,20 @@ async def on_message(message):
         trade = parse_trade(message.content)
         if trade:
             sheet.append_row(trade)
-            await message.channel.send(f" Nice Trade recorded: {trade[1]} {trade[2]} {trade[3]} @ {trade[4]}") # when input reqs are met
+            await message.channel.send(f"Nice Trade recorded: {trade[1]} {trade[2]} {trade[3]} @ {trade[4]}")
         else:
-            await message.channel.send(" Invalid format. Use: [BUY/ SELL] + [TICKER] + [##C (call)] + @ + [##PRICE]]") # when input reqs arent met
+            await message.channel.send("Invalid format. Use: [BUY/SELL] + [TICKER] + [##C] + @ + [PRICE]")
 
-client.run(DISCORD_TOKEN)
+# Run bot + server
+async def main():
+    config = Config()
+    config.bind = ["0.0.0.0:8000"]
+
+    await client.login(DISCORD_TOKEN)
+    await asyncio.gather(
+        client.connect(),
+        serve(app, config)
+    )
+
+if __name__ == "__main__":
+    asyncio.run(main())
