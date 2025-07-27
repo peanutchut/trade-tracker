@@ -1,3 +1,9 @@
+discord.py
+gspread
+oauth2client
+fastapi
+uvicorn
+python-dotenv
 h11==0.16.0
 h2==4.2.0
 hpack==4.1.0
