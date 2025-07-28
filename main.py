@@ -16,8 +16,8 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_NAME = "trade-signals"
 
 # Setup Google Sheets
-gc = gspread.service_account(filename='/Users/evanarumbaka/Desktop/DISCORD_BOT/credentialscopy.json')
-sheet = gc.open("Trade Tracker Test").sheet1
+gc = gspread.service_account(filename='credentialscopy.json')
+sheet = gc.open("Demo Google Sheet").sheet1
 
 # Setup Discord client
 intents = discord.Intents.default()
