@@ -17,7 +17,7 @@ CHANNEL_NAME = "trade-signals"
 
 # Setup Google Sheets
 gc = gspread.service_account(filename='credentialscopy.json')
-sheet = gc.open("Trade Tracker Test").sheet1
+sheet = gc.open("Demo Google Sheet").sheet1
 
 # Setup Discord client
 intents = discord.Intents.default()
