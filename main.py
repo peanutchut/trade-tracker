@@ -16,8 +16,8 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_NAME = "trade-signals"
 
 # Setup Google Sheets
-gc = gspread.service_account(filename='credentialscopy.json')
-sheet = gc.open("Demo Google Sheet").sheet1
+gc = gspread.service_account(filename='/Users/evanarumbaka/Desktop/DISCORD_BOT/credentialscopy.json')
+sheet = gc.open("Trade Tracker Test").sheet1
 
 # Setup Discord client
 intents = discord.Intents.default()
@@ -31,34 +31,79 @@ app = FastAPI()
 async def root():
     return JSONResponse(content={"message": "Bot is running!"})
 
-# Parse trade message
+# Parse trade message into structured format
 def parse_trade(message):
+    # Expected format example:
+    # BUY AMD 11/11 12/20 145C 5 @ 865
     parts = message.strip().split()
-    if len(parts) == 5 and parts[0] in ["BUY", "SELL"] and "@" in parts:
-        action = parts[0]
-        ticker = parts[1]
-        strike = parts[2]
-        price = parts[4]
-        return [str(datetime.now()), action, ticker, strike, price]
+
+    if len(parts) >= 8 and parts[0] in ["BUY", "SELL"]:
+        action = parts[0]                # BUY/SELL
+        ticker = parts[1]                # e.g., AMD
+        trade_enter = parts[2]           # e.g., 11/11
+        exp_date = parts[3]              # e.g., 12/20
+        strike_raw = parts[4]            # e.g., 145C
+        strike = strike_raw[:-1]         # 145
+        cp = strike_raw[-1]              # C or P
+        initial_contracts = parts[5]     # e.g., 5
+        price = parts[-1]                # e.g., 865
+        price_float = float(price) / 100 # convert to $8.65
+        # Notes or additional info can be captured after '@' if needed
+
+        return {
+            "action": action,
+            "ticker": ticker,
+            "trade_enter": trade_enter,
+            "trade_exit": "",  # Initially blank
+            "exp_date": exp_date,
+            "strike": strike,
+            "cp": cp,
+            "initial_contracts": initial_contracts,
+            "contracts": initial_contracts,
+            "avg_cost_option": f"${price_float:.2f}",
+            "$ avg_cost": f"${price_float * int(initial_contracts):,.2f}",
+            "market_value": f"${price_float * int(initial_contracts):,.2f}",
+            "% gain": "0.00%",
+            "$ gain": "$0.00",
+            "status": "Open",
+            "notes": ""
+        }
     return None
 
 @client.event
-async def on_ready():
-    print(f"Logged in as {client.user}")
-
-@client.event
 async def on_message(message):
-    print(f"Received message: {message.content} in channel: {message.channel.name}")
     if message.author == client.user:
         return
 
     if message.channel.name == CHANNEL_NAME:
-        trade = parse_trade(message.content)
-        if trade:
-            sheet.append_row(trade)
-            await message.channel.send(f"Nice Trade recorded: {trade[1]} {trade[2]} {trade[3]} @ {trade[4]}")
+        trade_data = parse_trade(message.content)
+        if trade_data:
+            # Get last Trade # and increment
+            last_row = len(sheet.get_all_values())
+            trade_number = last_row - 5  # Adjust based on header offset
+            row_values = [
+                trade_number,
+                trade_data["ticker"],
+                trade_data["trade_enter"],
+                trade_data["trade_exit"],
+                trade_data["exp_date"],
+                trade_data["strike"],
+                trade_data["cp"],
+                trade_data["initial_contracts"],
+                trade_data["contracts"],
+                trade_data["avg_cost_option"],
+                trade_data["$ avg_cost"],
+                trade_data["market_value"],
+                trade_data["% gain"],
+                trade_data["$ gain"],
+                trade_data["status"],
+                trade_data["notes"]
+            ]
+            sheet.append_row(row_values)
+            await message.channel.send(f"Trade #{trade_number} recorded: {trade_data['ticker']} {trade_data['strike']}{trade_data['cp']} @ {trade_data['avg_cost_option']}")
         else:
-            await message.channel.send("Invalid format. Use: [BUY/SELL] + [TICKER] + [##C] + @ + [PRICE]")
+            await message.channel.send("Invalid format. Use: BUY/SELL TICKER TRADE_ENTER EXP_DATE STRIKE[C/P] CONTRACTS @ PRICE")
+
 
 # Run bot + server
 async def main():
@@ -73,3 +118,10 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+
+
+
+
+
