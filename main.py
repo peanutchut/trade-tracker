@@ -31,7 +31,7 @@ app = FastAPI()
 async def root():
     return JSONResponse(content={"message": "Bot is running!"})
 
-# ✅ Parse trade message (BTO or STC)
+# ✅ Parse trade message
 def parse_trade(message: str):
     """
     Expected format:
@@ -58,40 +58,41 @@ def parse_trade(message: str):
     data["trade_exit"] = ""
     return data
 
-# ✅ Add a new trade (BTO) to Google Sheets
+# ✅ Add new trade (BTO)
 def add_trade(data):
     avg_cost_option = f"${data['price']:.2f}"
-    total_cost = data["price"] * data["contracts"] * 100  # Each contract = 100 shares
+    total_cost = data["price"] * data["contracts"] * 100
 
+    # Insert blank for Trade #
     row_values = [
+        "",  # Trade #
         data["ticker"], data["trade_enter"], data["trade_exit"],
         data["expiry"], data["strike"], data["cp"],
-        data["contracts"], data["contracts"],  # Initial & current contracts
+        data["contracts"], data["contracts"],  # Initial & current
         avg_cost_option, f"${total_cost:,.2f}", f"${total_cost:,.2f}",
         "0.00%", "$0.00", "Open", ""
     ]
     sheet.append_row(row_values)
 
-# ✅ Close an existing trade (STC) and update Google Sheets
+# ✅ Close trade (STC)
 def close_trade(data):
-    all_rows = sheet.get_all_values()[1:]  # Skip header row
+    all_rows = sheet.get_all_values()[1:]  # Skip header
     for idx, row in enumerate(reversed(all_rows), start=2):
-        if row[0] == data["ticker"] and row[13].upper() == "OPEN":
+        if row[1] == data["ticker"] and row[14].upper() == "OPEN":  # Ticker col = B, Status col = O
             row_num = len(all_rows) - idx + 2
-            open_price = float(row[8].replace("$", ""))
-            contracts = int(row[7])
+            open_price = float(row[9].replace("$", ""))
+            contracts = int(row[8])
             market_value = data["price"] * contracts * 100
             initial_cost = open_price * contracts * 100
             gain = market_value - initial_cost
             pct_gain = (gain / initial_cost) * 100 if initial_cost > 0 else 0
 
-            # Update cells
             updates = {
-                "C": datetime.now().strftime("%m/%d"),  # Trade Exit
-                "K": f"${market_value:,.2f}",          # Market Value
-                "L": f"{pct_gain:.2f}%",              # % Gain
-                "M": f"${gain:,.2f}",                 # $ Gain
-                "N": "Closed"                         # Status
+                "D": datetime.now().strftime("%m/%d"),  # Trade Exit
+                "L": f"${market_value:,.2f}",          # Market Value
+                "M": f"{pct_gain:.2f}%",              # % Gain
+                "N": f"${gain:,.2f}",                 # $ Gain
+                "O": "Closed"                         # Status
             }
             for col, val in updates.items():
                 sheet.update(f"{col}{row_num}", val)
@@ -126,10 +127,10 @@ async def on_message(message):
                     await message.channel.send(f"⚠ No matching open trade found for {trade_data['ticker']}.")
         else:
             await message.channel.send(
-                "❌ Invalid format.\nUse:\n`Trade-101#BTO AAPL 08/15 200C@3.5(2 contracts)`\nExample Close:\n`Trade-102#STC AAPL 08/15 200C@5(2 contracts)`"
+                "❌ Invalid format.\nExample Open:\n`Trade-101#BTO AAPL 08/15 200C@3.5(2 contracts)`\nExample Close:\n`Trade-102#STC AAPL 08/15 200C@5(2 contracts)`"
             )
 
-# ✅ Run both bot and FastAPI
+# ✅ Run bot + FastAPI
 async def main():
     config = Config()
     config.bind = ["0.0.0.0:8000"]
