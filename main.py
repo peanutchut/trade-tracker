@@ -2,6 +2,7 @@ import discord
 import os
 from dotenv import load_dotenv
 import gspread
+import re
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -30,68 +31,67 @@ app = FastAPI()
 async def root():
     return JSONResponse(content={"message": "Bot is running!"})
 
-# ✅ Parse new trade command
+# ✅ Parse new trade message (new format)
 def parse_trade(message):
-    # Expected format: BUY AMD 11/11 12/20 145C 5 @ 865
-    parts = message.strip().upper().split()
+    # Format: Trade-91#BTO AAPL 08/15 200P@2(4 contracts)
+    pattern = re.compile(
+        r'#(?P<action>BTO|STC)\s+'
+        r'(?P<ticker>[A-Z]+)\s+'
+        r'(?P<expiry>\d{2}/\d{2}(?:/\d{4})?)\s+'
+        r'(?P<strike>\d+)(?P<cp>[CP])@'
+        r'(?P<price>[\d.]+)\('
+        r'(?P<contracts>\d+)\s+contracts'
+    )
+    match = pattern.search(message)
+    if not match:
+        return None
 
-    if len(parts) >= 8 and parts[0] in ["BUY", "SELL"] and "@" in parts:
-        action = parts[0]
-        ticker = parts[1]
-        trade_enter = parts[2]
-        exp_date = parts[3]
-        strike_raw = parts[4]
-        strike = strike_raw[:-1]
-        cp = strike_raw[-1]
-        contracts = int(parts[5])
+    data = match.groupdict()
+    data["strike"] = int(data["strike"])
+    data["price"] = float(data["price"])
+    data["contracts"] = int(data["contracts"])
+    data["trade_enter"] = datetime.now().strftime("%m/%d")
+    data["trade_exit"] = ""
+    return data
 
-        try:
-            at_index = parts.index("@")
-            raw_price = parts[at_index + 1]
-        except ValueError:
-            return None
+# ✅ Add new trade to sheet
+def add_trade(data):
+    avg_cost_option = f"${data['price']:.2f}"
+    total_cost = data["price"] * data["contracts"] * 100  # Each contract = 100 shares
 
-        price_float = float(raw_price) / 100
-        total_cost = price_float * contracts * 100  # each option = 100 shares
+    row_values = [
+        data["ticker"], data["trade_enter"], data["trade_exit"],
+        data["expiry"], data["strike"], data["cp"],
+        data["contracts"], data["contracts"],  # Initial & current
+        avg_cost_option, f"${total_cost:,.2f}", f"${total_cost:,.2f}",
+        "0.00%", "$0.00", "Open", ""
+    ]
+    sheet.append_row(row_values)
 
-        return {
-            "action": action,
-            "ticker": ticker,
-            "trade_enter": trade_enter,
-            "trade_exit": "",
-            "exp_date": exp_date,
-            "strike": strike,
-            "cp": cp,
-            "initial_contracts": contracts,
-            "contracts": contracts,
-            "avg_cost_option": f"${price_float:.2f}",
-            "$ avg_cost": f"${total_cost:,.2f}",
-            "market_value": f"${total_cost:,.2f}",
-            "% gain": "0.00%",
-            "$ gain": "$0.00",
-            "status": "Open",
-            "notes": ""
-        }
-    return None
+# ✅ Close trade in sheet
+def close_trade(data):
+    all_rows = sheet.get_all_values()[1:]  # Skip header
+    for idx, row in enumerate(reversed(all_rows), start=2):
+        if row[0] == data["ticker"] and row[13].upper() == "OPEN":
+            row_num = len(all_rows) - idx + 2
+            open_price = float(row[8].replace("$", ""))
+            contracts = int(row[7])
+            market_value = data["price"] * contracts * 100
+            initial_cost = open_price * contracts * 100
+            gain = market_value - initial_cost
+            pct_gain = (gain / initial_cost) * 100 if initial_cost > 0 else 0
 
-# ✅ Parse close trade command
-def parse_close(message):
-    # Expected: CLOSE AMD 11/15 @ 900
-    parts = message.strip().upper().split()
-    if len(parts) == 5 and parts[0] == "CLOSE" and parts[3] == "@":
-        ticker = parts[1]
-        trade_exit = parts[2]
-        close_price = float(parts[4]) / 100
-        return ticker, trade_exit, close_price
-    return None
-
-# ✅ Find the last open trade for a ticker
-def find_open_trade(ticker):
-    all_rows = sheet.get_all_values()[1:]  # skip header
-    for idx, row in enumerate(reversed(all_rows), start=2):  # start at row 2
-        if row[0] == ticker and row[13].upper() == "OPEN":
-            return len(all_rows) - idx + 2  # return sheet row number
-    return None
+            updates = {
+                "C": datetime.now().strftime("%m/%d"),
+                "K": f"${market_value:,.2f}",
+                "L": f"{pct_gain:.2f}%",
+                "M": f"${gain:,.2f}",
+                "N": "Closed"
+            }
+            for col, val in updates.items():
+                sheet.update(f"{col}{row_num}", val)
+            return gain, pct_gain
+    return None, None
 
 @client.event
 async def on_ready():
@@ -103,62 +103,25 @@ async def on_message(message):
         return
 
     if message.channel.name == CHANNEL_NAME:
-        content = message.content.strip()
-
-        # Check for open trade
-        trade_data = parse_trade(content)
+        trade_data = parse_trade(message.content)
         if trade_data:
-            try:
-                all_values = sheet.get_all_values()
-                trade_number = len(all_values)  # count existing rows
-                row_values = [
-                    trade_data["ticker"], trade_data["trade_enter"], trade_data["trade_exit"],
-                    trade_data["exp_date"], trade_data["strike"], trade_data["cp"],
-                    trade_data["initial_contracts"], trade_data["contracts"],
-                    trade_data["avg_cost_option"], trade_data["$ avg_cost"],
-                    trade_data["market_value"], trade_data["% gain"], trade_data["$ gain"],
-                    trade_data["status"], trade_data["notes"]
-                ]
-                sheet.append_row(row_values)
+            if trade_data["action"] == "BTO":  # Open trade
+                add_trade(trade_data)
                 await message.channel.send(
-                    f"✅ Trade #{trade_number} recorded: {trade_data['ticker']} {trade_data['strike']}{trade_data['cp']} @ {trade_data['avg_cost_option']}"
+                    f"✅ New trade added: {trade_data['ticker']} {trade_data['strike']}{trade_data['cp']} @ ${trade_data['price']:.2f}"
                 )
-            except Exception as e:
-                await message.channel.send(f"❌ Error writing to sheet: {e}")
-            return
-
-        # Check for close trade
-        close_data = parse_close(content)
-        if close_data:
-            ticker, trade_exit, close_price = close_data
-            row_num = find_open_trade(ticker)
-            if row_num:
-                row = sheet.row_values(row_num)
-                open_price = float(row[8].replace("$", ""))
-                contracts = int(row[7])
-                market_value = close_price * contracts * 100
-                initial_cost = open_price * contracts * 100
-                gain = market_value - initial_cost
-                pct_gain = (gain / initial_cost) * 100 if initial_cost > 0 else 0
-
-                # Update cells in sheet
-                sheet.update(f"C{row_num}", trade_exit)
-                sheet.update(f"K{row_num}", f"${market_value:,.2f}")
-                sheet.update(f"L{row_num}", f"{pct_gain:.2f}%")
-                sheet.update(f"M{row_num}", f"${gain:,.2f}")
-                sheet.update(f"N{row_num}", "Closed")
-
-                await message.channel.send(
-                    f"✅ Trade closed: {ticker} @ ${close_price:.2f} | Gain: {pct_gain:.2f}% (${gain:,.2f})"
-                )
-            else:
-                await message.channel.send(f"⚠ No open trade found for {ticker}.")
-            return
-
-        # Invalid format
-        await message.channel.send(
-            "❌ Invalid format.\nUse:\nOpen: `BUY/SELL TICKER TRADE_ENTER EXP_DATE STRIKE[C/P] CONTRACTS @ PRICE`\nClose: `CLOSE TICKER TRADE_EXIT @ PRICE`"
-        )
+            elif trade_data["action"] == "STC":  # Close trade
+                gain, pct_gain = close_trade(trade_data)
+                if gain is not None:
+                    await message.channel.send(
+                        f"✅ Trade closed: {trade_data['ticker']} @ ${trade_data['price']:.2f} | Gain: {pct_gain:.2f}% (${gain:,.2f})"
+                    )
+                else:
+                    await message.channel.send(f"⚠ No matching open trade found for {trade_data['ticker']}.")
+        else:
+            await message.channel.send(
+                "❌ Invalid format.\nUse: Trade-91#BTO AAPL 08/15 200P@2(4 contracts)"
+            )
 
 # ✅ Run both bot and API
 async def main():
