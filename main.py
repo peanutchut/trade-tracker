@@ -35,12 +35,12 @@ async def root():
 # ✅ Parse trade message
 def parse_trade(message):
     pattern = re.compile(
-        r'Trade-(?P<trade_num>\d+)#(?P<action>BTO|STC)\s+'
-        r'(?P<ticker>[A-Z]+)\s+'
-        r'(?P<expiry>\d{2}/\d{2})\s+'
-        r'(?P<strike>\d+)(?P<cp>[CP])@'
-        r'(?P<price>[\d.]+)\('
-        r'(?P<contracts>\d+)\s+contract[s]?\)', re.IGNORECASE
+    r'Trade-(?P<trade_num>\d+)#(?P<action>BTO|STC)\s+'
+    r'(?P<ticker>[A-Z]+)\s+'
+    r'(?P<expiry>\d{2}/\d{2})\s+'
+    r'(?P<strike>\d+)(?P<cp>[CP])@'
+    r'(?P<price>[\d.]+)\('
+    r'(?P<contracts>\d+)\s+contract[s]?\s*\)', re.IGNORECASE
     )
     match = pattern.search(message)
     if not match:
