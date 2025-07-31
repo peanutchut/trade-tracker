@@ -18,7 +18,7 @@ CHANNEL_NAME = "trade-signals"
 
 # ✅ Google Sheets setup
 gc = gspread.service_account(filename='credentialscopy.json')
-sheet = gc.open("Demo Google Sheet").sheet1  # Ensure this matches your sheet
+sheet = gc.open("Demo Google Sheet").sheet1  # Make sure this matches your sheet name
 
 # ✅ Discord setup
 intents = discord.Intents.default()
@@ -35,13 +35,15 @@ async def root():
 # ✅ Parse trade message
 def parse_trade(message):
     pattern = re.compile(
-    r'Trade-(?P<trade_num>\d+)#(?P<action>BTO|STC)\s+'
-    r'(?P<ticker>[A-Z]+)\s+'
-    r'(?P<expiry>\d{2}/\d{2})\s+'
-    r'(?P<strike>\d+)(?P<cp>[CP])@'
-    r'(?P<price>[\d.]+)\('
-    r'(?P<contracts>\d+)\s+contract[s]?\s*\)', re.IGNORECASE
+        r'Trade-(?P<trade_num>\d+)#(?P<action>BTO|STC)\s+'
+        r'(?P<ticker>[A-Z]+)\s+'
+        r'(?P<expiry>\d{2}/\d{2})\s+'
+        r'(?P<strike>\d+)(?P<cp>[CP])@'
+        r'(?P<price>[\d.]+)\('
+        r'(?P<contracts>\d+)\s+contract[s]?\s*\)',  # <-- Fixed regex
+        re.IGNORECASE
     )
+
     match = pattern.search(message)
     if not match:
         return None
@@ -59,11 +61,11 @@ def parse_trade(message):
 def format_expiry(raw_date):
     year = datetime.now().year
     month, day = map(int, raw_date.split("/"))
-    if month < datetime.now().month:  # If date has passed, assume next year
+    if month < datetime.now().month:  # If date passed, assume next year
         year += 1
     return f"{year}-{month:02d}-{day:02d}"
 
-# ✅ Fetch live market price
+# ✅ Fetch live option price
 def get_market_price(ticker, expiry, strike, cp):
     try:
         stock = yf.Ticker(ticker)
@@ -78,7 +80,7 @@ def get_market_price(ticker, expiry, strike, cp):
         print(f"⚠ Error fetching market price: {e}")
     return None
 
-# ✅ Add trade to sheet
+# ✅ Add new trade (BTO)
 def add_trade(data):
     avg_cost = f"${data['price']:.2f}"
     total_cost = data['price'] * data['contracts'] * 100
@@ -106,10 +108,10 @@ def close_trade(data):
             pct_gain = (gain / initial_cost) * 100 if initial_cost else 0
 
             updates = {
-                "D": datetime.now().strftime("%m/%d"),
-                "L": f"${market_value:,.2f}",
-                "M": f"{pct_gain:.2f}%",
-                "N": f"${gain:,.2f}",
+                "D": datetime.now().strftime("%m/%d"),  # Trade Exit
+                "L": f"${market_value:,.2f}",          # Market Value
+                "M": f"{pct_gain:.2f}%",              # % Gain
+                "N": f"${gain:,.2f}",                 # $ Gain
                 "O": "Closed"
             }
             for col, val in updates.items():
@@ -120,10 +122,13 @@ def close_trade(data):
 # ✅ Auto-update open trades every 15 mins
 async def auto_update_open_trades():
     while True:
-        rows = sheet.get_all_values()[6:]
+        rows = sheet.get_all_values()[6:]  # Skip header rows
         for idx, row in enumerate(rows, start=7):
             if row[14].upper() == "OPEN":
-                ticker, expiry, strike, cp, contracts, open_price = row[1], row[4], row[5], row[6], int(row[8]), float(row[9].replace("$", ""))
+                ticker, expiry, strike, cp = row[1], row[4], row[5], row[6]
+                contracts = int(row[8])
+                open_price = float(row[9].replace("$", ""))
+
                 live_price = get_market_price(ticker, expiry, strike, cp)
                 if live_price:
                     market_value = live_price * contracts * 100
@@ -134,9 +139,9 @@ async def auto_update_open_trades():
                     sheet.update(f"L{idx}", f"${market_value:,.2f}")
                     sheet.update(f"M{idx}", f"{pct_gain:.2f}%")
                     sheet.update(f"N{idx}", f"${gain:,.2f}")
-        await asyncio.sleep(900)  # 15 minutes
+        await asyncio.sleep(900)  # 15 min interval
 
-# ✅ Discord Events
+# ✅ Discord events
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
