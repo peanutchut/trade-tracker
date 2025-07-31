@@ -3,6 +3,7 @@ gspread
 oauth2client
 fastapi
 uvicorn
+yfinance
 python-dotenv
 h11==0.16.0
 h2==4.2.0
