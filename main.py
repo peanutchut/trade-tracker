@@ -14,18 +14,18 @@ import yfinance as yf
 # ✅ Load environment variables
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_NAME = "trade-signals"  # Update if different
+CHANNEL_NAME = "trade-signals"  # Update this to your channel name
 
 # ✅ Google Sheets setup
 gc = gspread.service_account(filename='credentialscopy.json')
-sheet = gc.open("Demo Google Sheet").sheet1  # Change to your actual sheet name
+sheet = gc.open("Demo Google Sheet").sheet1  # Change to your sheet name
 
 # ✅ Discord setup
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# ✅ FastAPI app for health check
+# ✅ FastAPI health check
 app = FastAPI()
 
 @app.get("/")
@@ -60,7 +60,7 @@ def parse_trade(message):
 def format_expiry(raw_date):
     year = datetime.now().year
     month, day = map(int, raw_date.split("/"))
-    if month < datetime.now().month:  # If date passed, assume next year
+    if month < datetime.now().month:  # If month passed, assume next year
         year += 1
     return f"{year}-{month:02d}-{day:02d}"
 
@@ -96,27 +96,34 @@ def add_or_update_trade(data):
 
         new_contracts = current_contracts + data["contracts"]
         new_avg_cost = ((current_avg_price * current_contracts) + (data["price"] * data["contracts"])) / new_contracts
-        avg_cost_dollars = new_avg_cost * new_contracts * 100
+        avg_cost_total = new_avg_cost * new_contracts * 100
+
+        live_price = get_market_price(data["ticker"], data["expiry"], data["strike"], data["cp"]) or new_avg_cost
+        market_value = live_price * new_contracts * 100
 
         sheet.update(f"H{row_idx}", initial_contracts)
         sheet.update(f"I{row_idx}", new_contracts)
         sheet.update(f"J{row_idx}", f"${new_avg_cost:.2f}")
-        sheet.update(f"K{row_idx}", f"${avg_cost_dollars:,.2f}")
+        sheet.update(f"K{row_idx}", f"${avg_cost_total:,.2f}")
+        sheet.update(f"L{row_idx}", f"${market_value:,.2f}")
 
     else:  # Create new trade
-        avg_cost_dollars = data["price"] * data["contracts"] * 100
+        avg_cost_total = data["price"] * data["contracts"] * 100
+        live_price = get_market_price(data["ticker"], data["expiry"], data["strike"], data["cp"]) or data["price"]
+        market_value = live_price * data["contracts"] * 100
+
         row = [
             data["trade_num"], data["ticker"], data["trade_enter"], "",
             data["expiry"], data["strike"], data["cp"],
             data["contracts"], data["contracts"],
-            f"${data['price']:.2f}", f"${avg_cost_dollars:,.2f}",
-            f"${avg_cost_dollars:,.2f}", "0.00%", "$0.00", "Open"
+            f"${data['price']:.2f}", f"${avg_cost_total:,.2f}",
+            f"${market_value:,.2f}", "0.00%", "$0.00", "Open"
         ]
         sheet.append_row(row)
 
 # ✅ Close trade (STC handling)
 def close_trade(data):
-    rows = sheet.get_all_values()[1:]  # Skip header
+    rows = sheet.get_all_values()[1:]
     for idx, row in enumerate(rows, start=2):
         if str(row[0]) == str(data["trade_num"]) and row[14].upper() == "OPEN":
             open_price = float(row[9].replace("$", ""))
@@ -135,14 +142,15 @@ def close_trade(data):
             sheet.update(f"L{idx}", f"${market_value:,.2f}")
             sheet.update(f"M{idx}", f"{pct_gain:.2f}%")
             sheet.update(f"N{idx}", f"${gain:,.2f}")
+
             if remaining == 0:
                 sheet.update(f"O{idx}", "Closed")
                 sheet.format(f"A{idx}:O{idx}", {"textFormat": {"strikethrough": True}})
-                return gain, pct_gain, live_price, True  # Full close
-            return gain, pct_gain, live_price, False  # Partial close
+                return gain, pct_gain, live_price, True
+            return gain, pct_gain, live_price, False
     return None, None, None, False
 
-# ✅ Auto-update all open trades every 15 mins
+# ✅ Auto-update Market Value for open trades
 async def auto_update_open_trades():
     while True:
         rows = sheet.get_all_values()[1:]
