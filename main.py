@@ -14,18 +14,18 @@ import yfinance as yf
 # ✅ Load environment variables
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_NAME = "trade-signals"
+CHANNEL_NAME = "trade-signals"  # Update if different
 
 # ✅ Google Sheets setup
 gc = gspread.service_account(filename='credentialscopy.json')
-sheet = gc.open("Demo Google Sheet").sheet1  # Change this to your sheet name
+sheet = gc.open("Demo Google Sheet").sheet1  # Change to your actual sheet name
 
 # ✅ Discord setup
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# ✅ FastAPI health check
+# ✅ FastAPI app for health check
 app = FastAPI()
 
 @app.get("/")
@@ -40,7 +40,7 @@ def parse_trade(message):
         r'(?P<expiry>\d{2}/\d{2})\s+'
         r'(?P<strike>\d+)(?P<cp>[CP])@'
         r'(?P<price>[\d.]+)\('
-        r'(?P<contracts>\d+)\s+contract[s]?\s*\)', 
+        r'(?P<contracts>\d+)\s+contract[s]?\s*\)',
         re.IGNORECASE
     )
     match = pattern.search(message)
@@ -79,9 +79,9 @@ def get_market_price(ticker, expiry, strike, cp):
         print(f"⚠ Error fetching market price: {e}")
     return None
 
-# ✅ Add or update trade (Handles multiple BTO for same trade)
+# ✅ Add or update trade (BTO handling)
 def add_or_update_trade(data):
-    rows = sheet.get_all_values()[1:]  # Skip header
+    rows = sheet.get_all_values()[1:]  # Skip header row
     row_idx = None
 
     for idx, row in enumerate(rows, start=2):
@@ -89,7 +89,7 @@ def add_or_update_trade(data):
             row_idx = idx
             break
 
-    if row_idx:  # Existing trade → update
+    if row_idx:  # Update existing trade
         current_contracts = int(row[8]) if row[8] else 0
         initial_contracts = int(row[7]) if row[7] else data["contracts"]
         current_avg_price = float(row[9].replace("$", "")) if row[9] else 0.0
@@ -103,7 +103,7 @@ def add_or_update_trade(data):
         sheet.update(f"J{row_idx}", f"${new_avg_cost:.2f}")
         sheet.update(f"K{row_idx}", f"${avg_cost_dollars:,.2f}")
 
-    else:  # New trade → insert
+    else:  # Create new trade
         avg_cost_dollars = data["price"] * data["contracts"] * 100
         row = [
             data["trade_num"], data["ticker"], data["trade_enter"], "",
@@ -114,7 +114,7 @@ def add_or_update_trade(data):
         ]
         sheet.append_row(row)
 
-# ✅ Close trade (Handles STC and partial closes)
+# ✅ Close trade (STC handling)
 def close_trade(data):
     rows = sheet.get_all_values()[1:]  # Skip header
     for idx, row in enumerate(rows, start=2):
@@ -130,22 +130,22 @@ def close_trade(data):
             gain = (live_price - open_price) * data["contracts"] * 100
             pct_gain = (gain / (open_price * data["contracts"] * 100)) * 100
 
-            sheet.update(f"D{idx}", datetime.now().strftime("%m/%d"))  # Trade Exit
-            sheet.update(f"I{idx}", remaining)  # Update contracts
+            sheet.update(f"D{idx}", datetime.now().strftime("%m/%d"))
+            sheet.update(f"I{idx}", remaining)
             sheet.update(f"L{idx}", f"${market_value:,.2f}")
             sheet.update(f"M{idx}", f"{pct_gain:.2f}%")
             sheet.update(f"N{idx}", f"${gain:,.2f}")
             if remaining == 0:
                 sheet.update(f"O{idx}", "Closed")
-                # ✅ Apply strikethrough to entire row A:O
                 sheet.format(f"A{idx}:O{idx}", {"textFormat": {"strikethrough": True}})
-            return gain, pct_gain, live_price
-    return None, None, None
+                return gain, pct_gain, live_price, True  # Full close
+            return gain, pct_gain, live_price, False  # Partial close
+    return None, None, None, False
 
 # ✅ Auto-update all open trades every 15 mins
 async def auto_update_open_trades():
     while True:
-        rows = sheet.get_all_values()[1:]  # Skip header
+        rows = sheet.get_all_values()[1:]
         for idx, row in enumerate(rows, start=2):
             if row[14].upper() == "OPEN":
                 ticker, expiry, strike, cp = row[1], row[4], row[5], row[6]
@@ -162,7 +162,7 @@ async def auto_update_open_trades():
                     sheet.update(f"L{idx}", f"${market_value:,.2f}")
                     sheet.update(f"M{idx}", f"{pct_gain:.2f}%")
                     sheet.update(f"N{idx}", f"${gain:,.2f}")
-        await asyncio.sleep(900)  # Update every 15 mins
+        await asyncio.sleep(900)
 
 # ✅ Discord Events
 @client.event
@@ -181,9 +181,12 @@ async def on_message(message):
                 add_or_update_trade(trade_data)
                 await message.channel.send(f"✅ Added/Updated: {trade_data['ticker']} {trade_data['strike']}{trade_data['cp']} @ ${trade_data['price']:.2f}")
             elif trade_data["action"].upper() == "STC":
-                gain, pct_gain, used_price = close_trade(trade_data)
+                gain, pct_gain, used_price, fully_closed = close_trade(trade_data)
                 if gain is not None:
-                    await message.channel.send(f"✅ Closed: {trade_data['ticker']} @ ${used_price:.2f} | Gain: {pct_gain:.2f}% (${gain:,.2f})")
+                    if fully_closed:
+                        await message.channel.send(f"✅ Trade #{trade_data['trade_num']} CLOSED! {trade_data['ticker']} @ ${used_price:.2f} | Gain: {pct_gain:.2f}% (${gain:,.2f})")
+                    else:
+                        await message.channel.send(f"✅ Partially closed: {trade_data['ticker']} @ ${used_price:.2f} | Gain: {pct_gain:.2f}% (${gain:,.2f})")
                 else:
                     await message.channel.send(f"⚠ No open trade found for #{trade_data['trade_num']}")
         else:
