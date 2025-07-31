@@ -18,7 +18,7 @@ CHANNEL_NAME = "trade-signals"  # Update to your actual channel name
 
 # ✅ Google Sheets setup
 gc = gspread.service_account(filename='credentialscopy.json')
-sheet = gc.open("Demo Google Sheet").sheet1  # Update to your sheet name
+sheet = gc.open("Demo Google Sheet").sheet1  # Replace with your sheet name
 
 # ✅ Discord setup
 intents = discord.Intents.default()
@@ -32,7 +32,7 @@ app = FastAPI()
 async def root():
     return JSONResponse(content={"message": "Bot is running!"})
 
-# ✅ Regex that allows extra text
+# ✅ Regex for trade parsing
 pattern = re.compile(
     r'Trade-(?P<trade_num>\d+)#(?P<action>BTO|STC)\s+'
     r'(?P<ticker>[A-Z]+)\s+'
@@ -40,11 +40,11 @@ pattern = re.compile(
     r'(?P<strike>\d+)(?P<cp>[CP])@'
     r'(?P<price>[\d.]+)\('
     r'(?P<contracts>\d+)\s+contract[s]?\s*\)'
-    r'(?:.*)?',  # ✅ ignore @everyone or emojis
+    r'(?:\s+(?P<notes>.*))?',  # ✅ Capture extra text as Notes
     re.IGNORECASE
 )
 
-# ✅ Parse message into dict
+# ✅ Parse trade message
 def parse_trade(message):
     match = pattern.search(message)
     if not match:
@@ -57,6 +57,7 @@ def parse_trade(message):
     data["expiry"] = format_expiry(data["expiry"])
     data["cp"] = data["cp"].upper()
     data["trade_enter"] = datetime.now().strftime("%m/%d")
+    data["notes"] = data.get("notes") if data.get("notes") else ""
     return data
 
 def format_expiry(raw_date):
@@ -66,7 +67,7 @@ def format_expiry(raw_date):
         year += 1
     return f"{year}-{month:02d}-{day:02d}"
 
-# ✅ Fetch live option price from Yahoo
+# ✅ Fetch live option price
 def get_market_price(ticker, expiry, strike, cp):
     try:
         stock = yf.Ticker(ticker)
@@ -80,19 +81,15 @@ def get_market_price(ticker, expiry, strike, cp):
         print(f"⚠ Error fetching market price: {e}")
     return None
 
-# ✅ Add or update trade for BTO
+# ✅ Add or update trade (BTO)
 def add_or_update_trade(data):
     rows = sheet.get_all_values()[1:]
-    row_idx = None
+    matching_rows = [idx for idx, row in enumerate(rows, start=2) if str(row[0]) == str(data["trade_num"]) and row[14].upper() == "OPEN"]
 
-    for idx, row in enumerate(rows, start=2):
-        if str(row[0]) == str(data["trade_num"]) and row[14].upper() == "OPEN":
-            row_idx = idx
-            break
-
-    if row_idx:  # Update existing trade
-        current_contracts = int(row[8])
-        avg_cost_old = float(row[9].replace("$", ""))
+    if matching_rows:
+        row_idx = matching_rows[0]
+        current_contracts = int(sheet.cell(row_idx, 9).value)
+        avg_cost_old = float(sheet.cell(row_idx, 10).value.replace("$", ""))
 
         new_total_contracts = current_contracts + data["contracts"]
         new_avg_cost = ((avg_cost_old * current_contracts) + (data["price"] * data["contracts"])) / new_total_contracts
@@ -105,21 +102,22 @@ def add_or_update_trade(data):
         sheet.update(f"J{row_idx}", f"${new_avg_cost:.2f}")
         sheet.update(f"K{row_idx}", f"${total_cost_basis:,.2f}")
         sheet.update(f"L{row_idx}", f"${market_value:,.2f}")
-    else:  # New trade
+        if data["notes"]:
+            sheet.update(f"P{row_idx}", data["notes"])
+    else:
         avg_cost_total = data["price"] * data["contracts"] * 100
         live_price = get_market_price(data["ticker"], data["expiry"], data["strike"], data["cp"]) or data["price"]
         market_value = live_price * data["contracts"] * 100
-
         row = [
             data["trade_num"], data["ticker"], data["trade_enter"], "",
             data["expiry"], data["strike"], data["cp"],
             data["contracts"], data["contracts"],
             f"${data['price']:.2f}", f"${avg_cost_total:,.2f}",
-            f"${market_value:,.2f}", "0.00%", "$0.00", "Open"
+            f"${market_value:,.2f}", "0.00%", "$0.00", "Open", data["notes"]
         ]
         sheet.append_row(row)
 
-# ✅ Close trade for STC
+# ✅ Close trade (STC)
 def close_trade(data):
     rows = sheet.get_all_values()[1:]
     for idx, row in enumerate(rows, start=2):
@@ -138,10 +136,12 @@ def close_trade(data):
             sheet.update(f"L{idx}", f"${market_value:,.2f}")
             sheet.update(f"M{idx}", f"{pct_gain:.2f}%")
             sheet.update(f"N{idx}", f"${gain:,.2f}")
+            if data["notes"]:
+                sheet.update(f"P{idx}", data["notes"])
 
             if remaining == 0:
                 sheet.update(f"O{idx}", "Closed")
-                sheet.format(f"A{idx}:O{idx}", {"textFormat": {"strikethrough": True}})
+                sheet.format(f"A{idx}:P{idx}", {"textFormat": {"strikethrough": True}})
                 return gain, pct_gain, live_price, True
             return gain, pct_gain, live_price, False
     return None, None, None, False
